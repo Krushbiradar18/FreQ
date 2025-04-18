@@ -6,8 +6,10 @@ document.addEventListener("DOMContentLoaded", function () {
     const mediumFrequentSection = document.getElementById("medium-frequent");
     const leastFrequentSection = document.getElementById("least-frequent");
     const downloadBtn = document.getElementById("downloadBtn");
+    const downloadAnswersBtn = document.getElementById("downloadAnswersBtn");
     const chartContainer = document.getElementById("chart-container");
-    let questionChart = null;
+
+    let currentQuestions = [];
 
     fileInput.addEventListener("change", function (event) {
         handleFiles(event.target.files);
@@ -71,8 +73,10 @@ document.addEventListener("DOMContentLoaded", function () {
                 downloadBtn.style.display = "none";
             } else {
                 displayQuestions(data.questions);
+                currentQuestions = data.questions.map(q => q.question);
                 displayFiles(files);
                 downloadBtn.style.display = "block";
+                downloadAnswersBtn.style.display = "none"; // Hide initially
             }
         })
         .catch(error => {
@@ -83,8 +87,7 @@ document.addEventListener("DOMContentLoaded", function () {
     }
 
     function displayFiles(files) {
-        fileList.innerHTML = ""; // Clear previous list
-
+        fileList.innerHTML = "";
         for (let file of files) {
             const fileItem = document.createElement("div");
             fileItem.classList.add("file-item");
@@ -92,12 +95,10 @@ document.addEventListener("DOMContentLoaded", function () {
                 <p>${file.name}</p>
                 <button class="delete-btn">Delete</button>
             `;
-
             fileItem.querySelector(".delete-btn").addEventListener("click", function () {
                 fileItem.remove();
                 checkFileListEmpty();
             });
-
             fileList.appendChild(fileItem);
         }
     }
@@ -109,9 +110,7 @@ document.addEventListener("DOMContentLoaded", function () {
     }
 
     function displayQuestions(questions) {
-        mostFrequentSection.innerHTML = "<h3>Most Frequent</h3>";
-        mediumFrequentSection.innerHTML = "<h3>Medium Frequent</h3>";
-        leastFrequentSection.innerHTML = "<h3>Least Frequent</h3>";
+
 
         if (questions.length === 0) {
             downloadBtn.style.display = "none";
@@ -123,7 +122,7 @@ document.addEventListener("DOMContentLoaded", function () {
         questions.forEach((q, index) => {
             let div = document.createElement("div");
             div.classList.add("question");
-            div.innerHTML = `<p>${q.question}</p> <span>Frequency: ${q.frequency}</span>`;
+            div.innerHTML = `<p class="question-text">${q.question}</p> <span>Frequency: ${q.frequency}</span>`;
 
             if (index < questions.length * 0.3) {
                 mostFrequentSection.appendChild(div);
@@ -160,7 +159,79 @@ document.addEventListener("DOMContentLoaded", function () {
         });
     });
 
-    // Global modal popup handler
+    // Get answers from backend
+    document.getElementById("get_ans").addEventListener("click", function () {
+        if (currentQuestions.length === 0) {
+            showError("Please upload files and generate questions first.");
+            return;
+        }
+
+        fetch("/get-answers", {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ questions: currentQuestions }),
+        })
+        .then((response) => response.json())
+        .then((data) => {
+            const container = document.getElementById('answers_output');
+            container.innerHTML = '';
+
+            if (currentQuestions.length === data.answers.length) {
+                data.answers.forEach((item, index) => {
+                    const qaCard = document.createElement('div');
+                    qaCard.classList.add('qa-card');
+                    qaCard.innerHTML = `
+                        <div class="question-label">Q${index + 1}:</div>
+                        <div class="question-text-display">${item.question}</div>
+                        <div class="answer-label">Answer:</div>
+                        <div class="answer-text">${item.answer}</div>
+                    `;
+                    container.appendChild(qaCard);
+                });
+
+                // Show the download answers button
+                if (downloadAnswersBtn) {
+                    downloadAnswersBtn.style.display = "inline-block";
+                }
+
+            } else {
+                container.innerHTML = "<p>There was a mismatch between questions and answers.</p>";
+            }
+        })
+        .catch((error) => {
+            console.error("Error:", error);
+            showError("Failed to fetch answers.");
+        });
+    });
+
+    // Download answers PDF
+    if (downloadAnswersBtn) {
+        downloadAnswersBtn.addEventListener("click", function () {
+            fetch("/export/answers")
+                .then(response => {
+                    if (!response.ok) {
+                        throw new Error("Failed to generate answers PDF.");
+                    }
+                    return response.blob();
+                })
+                .then(blob => {
+                    const url = window.URL.createObjectURL(blob);
+                    const a = document.createElement("a");
+                    a.href = url;
+                    a.download = "answers_report.pdf";
+                    document.body.appendChild(a);
+                    a.click();
+                    document.body.removeChild(a);
+                })
+                .catch(error => {
+                    console.error("Error downloading answers PDF:", error);
+                    showError("Failed to download answers. Please try again later.");
+                });
+        });
+    }
+
     window.showError = function (message) {
         const modal = document.getElementById("errorModal");
         const messageBox = document.getElementById("errorMessage");
@@ -169,7 +240,7 @@ document.addEventListener("DOMContentLoaded", function () {
             messageBox.textContent = message;
             modal.style.display = "block";
         } else {
-            alert(message); // Fallback
+            alert(message);
         }
     };
 });

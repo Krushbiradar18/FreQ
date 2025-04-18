@@ -1,4 +1,4 @@
-from flask import Flask, render_template, request, jsonify, send_file
+from flask import Flask, render_template, request, jsonify, send_file, session
 import os
 import pdfplumber
 import docx
@@ -17,27 +17,41 @@ from PyPDF2 import PdfReader, PdfWriter
 from docx.oxml.ns import qn
 from docx.oxml import parse_xml
 from docx.shared import Inches
+from openai import OpenAI
 
-# Initialize NLTK
 nltk.download('punkt')
 from nltk.tokenize import sent_tokenize
 
-# Flask App Configuration
 app = Flask(__name__)
+app.secret_key = 'some_random_secret'
 UPLOAD_FOLDER = "uploads"
-DATA_FILE = "analysis_results.json"  # Store analysis results
+DATA_FILE = "analysis_results.json"
 ALLOWED_EXTENSIONS = {'pdf', 'docx'}
-MAX_FILE_SIZE_MB = 16  
+MAX_FILE_SIZE_MB = 16
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
-app.config['MAX_CONTENT_LENGTH'] = MAX_FILE_SIZE_MB * 1024 * 1024  # Convert MB to bytes
+app.config['MAX_CONTENT_LENGTH'] = MAX_FILE_SIZE_MB * 1024 * 1024
 
-# Ensure Upload Directory Exists
 os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 
-# Load BERT Model
 bert_model = SentenceTransformer('paraphrase-MiniLM-L6-v2')
 
-# Helper Functions
+client = OpenAI(api_key="REMOVED_API_KEY")
+
+def get_ans_gpt(questions):
+    answers = []
+    for question in questions:
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": "You are a study assistant. Answer academic questions concisely."},
+                {"role": "user", "content": question}
+            ]
+        )
+        answer = response.choices[0].message.content
+        print(f"Q: {question}\nA: {answer}\n")
+        answers.append({"question": question, "answer": answer})
+    return answers
+
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
@@ -53,7 +67,6 @@ def extract_text_pdf(file_path):
     with pdfplumber.open(file_path) as pdf:
         for page in pdf.pages:
             page_text = page.extract_text()
-            # If no text is extracted, try OCR
             if not page_text:
                 page_text = ocr_page(page)
             if page_text:
@@ -64,16 +77,12 @@ def remove_watermark_pdf(input_path):
     output_path = input_path.replace(".pdf", "_cleaned.pdf")
     reader = PdfReader(input_path)
     writer = PdfWriter()
-
     for page in reader.pages:
-        # Remove annotations like watermark stamps
         if "/Annots" in page:
             page["/Annots"] = []
         writer.add_page(page)
-
     with open(output_path, "wb") as f:
         writer.write(f)
-
     return output_path
 
 def remove_watermark_docx(input_path):
@@ -88,7 +97,6 @@ def remove_watermark_docx(input_path):
     return output_path
 
 def ocr_page(page):
-    # Convert PDF page to an image
     image = page.to_image(resolution=300)
     img_pil = image.original.convert("RGB")
     text = pytesseract.image_to_string(img_pil)
@@ -107,7 +115,6 @@ def load_analysis_results():
 def analyze_questions(file_paths):
     all_questions = []
     question_frequency = defaultdict(int)
-
     for file_path in file_paths:
         if file_path.endswith(".pdf"):
             cleaned_path = remove_watermark_pdf(file_path)
@@ -117,52 +124,41 @@ def analyze_questions(file_paths):
             text = extract_text_docx(cleaned_path)
         else:
             continue
-
         sentences = sent_tokenize(text)
         cleaned_sentences = [clean_text(s.replace("\n", " ").strip()) for s in sentences]
         questions = [s for s in cleaned_sentences if s.endswith("?") and len(s.split()) > 3 and any(c.isalpha() for c in s)]
         for q in questions:
             question_frequency[q] += 1
-        
         all_questions.extend(questions)
-    
     grouped_questions = group_similar_questions_bert(all_questions, question_frequency)
-
     if not grouped_questions:
-        return None  # No relevant question content found
-
+        return None
     save_analysis_results(grouped_questions)
     return grouped_questions
 
 def group_similar_questions_bert(questions, question_frequency, threshold=0.75):
     if not questions:
         return []
-
     unique_questions = list(set(questions))
     question_embeddings = bert_model.encode(unique_questions, convert_to_tensor=True)
     grouped_questions = []
     used_indices = set()
     question_map = defaultdict(list)
-
     for i, q1 in enumerate(unique_questions):
         if i in used_indices:
             continue
         group = [q1]
         used_indices.add(i)
-
         for j, q2 in enumerate(unique_questions):
             if i != j and j not in used_indices:
                 similarity = util.pytorch_cos_sim(question_embeddings[i], question_embeddings[j]).item()
                 if similarity > threshold:
                     group.append(q2)
                     used_indices.add(j)
-
         representative_question = group[0]
         question_map[representative_question] = group
-
     return [{"question": key, "similar_variants": value, "frequency": sum(question_frequency[q] for q in value)} for key, value in question_map.items()]
 
-# Routes
 @app.route("/")
 def home():
     results = load_analysis_results()
@@ -172,11 +168,9 @@ def home():
 def upload_file():
     if "files" not in request.files:
         return jsonify({"error": "No files uploaded"}), 400
-
     files = request.files.getlist("files")
     if not files:
         return jsonify({"error": "No selected files"}), 400
-
     file_paths = []
     for file in files:
         if not allowed_file(file.filename):
@@ -185,20 +179,27 @@ def upload_file():
         file_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
         file.save(file_path)
         file_paths.append(file_path)
-
     analyzed_questions = analyze_questions(file_paths)
-
     if analyzed_questions is None:
         return jsonify({"error": "Uploaded file doesn't contain any valid questions or question paper content."}), 400
-
+    session['questions'] = [q['question'] for q in analyzed_questions]
     return jsonify({"questions": analyzed_questions}), 200
+
+@app.route("/get-answers", methods=['POST'])
+def get_ans():
+    questions = session.get('questions')
+    if not questions:
+        return jsonify({"error": "No questions found in session"}), 400
+    answers = get_ans_gpt(questions)
+    session['answers'] = answers
+    return jsonify({"answers": answers})
 
 @app.route("/export/pdf")
 def export_pdf():
     results = load_analysis_results()
     if not results:
         return jsonify({"error": "No data available for export"}), 400
-
+    sorted_results = sorted(results, key=lambda x: x['frequency'], reverse=True)
     pdf = FPDF()
     pdf.set_auto_page_break(auto=True, margin=15)
     pdf.add_page()
@@ -206,14 +207,31 @@ def export_pdf():
     pdf.cell(200, 10, "Question Analysis Report", ln=True, align="C")
     pdf.ln(10)
     pdf.set_font("Arial", "", 12)
-
-    for idx, question in enumerate(results, start=1):
+    for idx, question in enumerate(sorted_results, start=1):
         pdf.multi_cell(0, 10, f"{idx}. {question['question']}\nFrequency: {question['frequency']}")
         pdf.ln(5)
-    
     file_path = "question_analysis.pdf"
     pdf.output(file_path)
     return send_file(file_path, as_attachment=True, download_name="question_analysis.pdf")
+
+@app.route("/export/answers")
+def export_answers():
+    answers = session.get('answers')
+    if not answers:
+        return jsonify({"error": "No answers available to export"}), 400
+    pdf = FPDF()
+    pdf.set_auto_page_break(auto=True, margin=15)
+    pdf.add_page()
+    pdf.set_font("Arial", "B", 16)
+    pdf.cell(200, 10, "AI-Generated Answers", ln=True, align="C")
+    pdf.ln(10)
+    pdf.set_font("Arial", "", 12)
+    for idx, qa in enumerate(answers, start=1):
+        pdf.multi_cell(0, 10, f"{idx}. Q: {qa['question']}\nA: {qa['answer']}")
+        pdf.ln(5)
+    file_path = "answers_report.pdf"
+    pdf.output(file_path)
+    return send_file(file_path, as_attachment=True, download_name="answers_report.pdf")
 
 @app.route("/services")
 def services():

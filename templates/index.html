@@ -5,55 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>FreQ - Question Paper Analysis</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
-    <style>
-        .modal {
-            display: none;
-            position: fixed;
-            z-index: 999;
-            left: 0;
-            top: 0;
-            width: 100%;
-            height: 100%;
-            overflow: auto;
-            background-color: rgba(0,0,0,0.5);
-        }
 
-        .modal-content {
-            background-color: #fff;
-            margin: 15% auto;
-            padding: 20px;
-            border-radius: 8px;
-            width: 90%;
-            max-width: 400px;
-            text-align: center;
-            box-shadow: 0 4px 10px rgba(0,0,0,0.3);
-        }
-
-        .close-btn {
-            margin-top: 15px;
-            background-color: #e74c3c;
-            color: white;
-            border: none;
-            padding: 8px 16px;
-            border-radius: 5px;
-            cursor: pointer;
-        }
-
-        .close-btn:hover {
-            background-color: #c0392b;
-        }
-
-        #chart-container {
-            width: 80%;
-            height: 400px;
-            display: none;
-            margin: auto;
-        }
-
-        .main-content {
-            padding-top: 80px; /* Gap below navbar */
-        }
-    </style>
 </head>
 <body>
 
@@ -106,6 +58,21 @@
                 <canvas id="questionChart"></canvas>
             </div>
         </section>
+
+<!-- Answers Section -->
+<section class="page-section answers-section">
+    <div class="anscon" style="text-align: center; margin-bottom: 20px;">
+        <button id="get_ans" class="ans-btn">GET ANSWERS</button>
+    </div>
+
+    <div id="answers_output"></div>
+
+    <!-- Centered Download Button -->
+    <div style="text-align: center; margin-top: 10px;">
+        <button id="downloadAnswersBtn" class="download-btn" style="display: none;">Download Answers</button>
+    </div>
+</section>
+        
 
     </div>
 
